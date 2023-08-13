@@ -8,6 +8,7 @@ pandas = "*"
 plotly = "*"
 scikit-learn = "*"
 streamlit-nightly = "*"
+pre-commit = "*"
 
 [dev-packages]
 
