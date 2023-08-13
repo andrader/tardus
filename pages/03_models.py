@@ -1,77 +1,20 @@
-from numbers import Integral, Number
+import numbers
+from numbers import Integral
+from typing import Any
 
 import pandas as pd
-from sklearn import clone
+import sklearn.utils._param_validation as pv
 import streamlit as st
 from sklearn.base import BaseEstimator
-from sklearn.linear_model import (
-    LinearRegression,
-    QuantileRegressor,
-    RANSACRegressor,
-    HuberRegressor,
-    TheilSenRegressor,
-)
-from streamlit import session_state as state
-from streamlit.runtime.state import NoValue
-import sklearn.utils._param_validation as pv
-
-from typing import Any
-import numpy as np
-import numbers
-
-
 from sklearn.utils import all_estimators
+from streamlit import session_state as state
+
+import helpers as h
 
 
 @st.cache_data
 def get_all_regressors_sklearn(type_filter=None):
     return all_estimators(type_filter=type_filter)
-
-
-# ESTIMATORS = get_all_regressors_sklearn()
-
-
-# ESTIMATORS = {
-#     "OLS": LinearRegression,
-#     "RANSAC": RANSACRegressor(min_samples=50, residual_threshold=5.0),
-#     # non-parametric, but doesn't scale well
-#     "TheilSenRegressor": TheilSenRegressor,
-#     "HuberRegressor": HuberRegressor(),  # epsilon=1.35
-#     "QuantileRegressor": QuantileRegressor(solver="highs"),
-# }
-
-
-class _NoVal(NoValue):
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-
-def init(k, v, d=state):
-    if k not in d:
-        d[k] = v
-
-
-def get_grid(nobs, ncols=2):
-    for i in range(nobs):
-        col = i % ncols
-        if col == 0:
-            cols = st.columns(ncols)
-        yield cols[col]
-
-
-def grid(ncols=2):
-    parent = st.container()
-    i = 0
-    while True:
-        col = i % ncols
-        if col == 0:
-            cols = parent.columns(ncols)
-        yield cols[col]
-        i += 1
 
 
 def get_params_constraints(estimator: BaseEstimator) -> dict[str, tuple[list, Any]]:
@@ -239,7 +182,7 @@ def normalize_constraints(constraints):
 def create_params_widgets(estimator_name, params):
     params_values = {}
 
-    containers = grid(ncols=3)
+    containers = h.grid(ncols=3)
     for param in params.items():
         p_name, (p_constraints, p_default, p_ignored_constraints) = param
         key_usedefault = "_".join([estimator_name, p_name, "usedefault"])
@@ -431,9 +374,9 @@ def show_estimators():
 
 if __name__ == "__main__":
     st.set_page_config(layout="wide")
-    init("chosen_estimators", dict())
-    init("params_values", dict())
-    init("_estimator", None)
+    h.init("chosen_estimators", dict())
+    h.init("params_values", dict())
+    h.init("_estimator", None)
 
     st.header("Models")
     show_estimators()
