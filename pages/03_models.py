@@ -266,12 +266,14 @@ def create_params_widgets(estimator_name, params):
                 elif len(p_constraints) == 1:
                     c = p_constraints[0]
                 else:
-                    c = st.selectbox(
+                    c_idx = st.selectbox(
                         label=key_constraint,
-                        options=list(p_constraints),
+                        options=list(range(len(p_constraints))),
                         key=key_constraint,
+                        format_func=lambda i: str(p_constraints[i]),
                         label_visibility="hidden",
                     )
+                    c = p_constraints[c_idx]
 
                 widget, widget_kwargs = dipatch_contraint(c, p_default)
 
