@@ -13,19 +13,41 @@ from sklearn.linear_model import (
 )
 from streamlit import session_state as state
 from streamlit.runtime.state import NoValue
-from sklearn.utils._param_validation import Interval, Options, Hidden
-import inspect
+import sklearn.utils._param_validation as pv
+
 from typing import Any
+import numpy as np
+import numbers
 
 
-ESTIMATORS = {
-    "OLS": LinearRegression,
-    "RANSAC": RANSACRegressor(min_samples=50, residual_threshold=5.0),
-    # non-parametric, but doesn't scale well
-    "TheilSenRegressor": TheilSenRegressor,
-    "HuberRegressor": HuberRegressor(),  # epsilon=1.35
-    "QuantileRegressor": QuantileRegressor(solver="highs"),
-}
+from sklearn.utils import all_estimators
+
+
+@st.cache_data
+def get_all_regressors_sklearn(type_filter=None):
+    return all_estimators(type_filter=type_filter)
+
+
+# ESTIMATORS = get_all_regressors_sklearn()
+
+
+# ESTIMATORS = {
+#     "OLS": LinearRegression,
+#     "RANSAC": RANSACRegressor(min_samples=50, residual_threshold=5.0),
+#     # non-parametric, but doesn't scale well
+#     "TheilSenRegressor": TheilSenRegressor,
+#     "HuberRegressor": HuberRegressor(),  # epsilon=1.35
+#     "QuantileRegressor": QuantileRegressor(solver="highs"),
+# }
+
+
+class _NoVal(NoValue):
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
 
 def init(k, v, d=state):
@@ -41,9 +63,30 @@ def get_grid(nobs, ncols=2):
         yield cols[col]
 
 
+def grid(ncols=2):
+    parent = st.container()
+    i = 0
+    while True:
+        col = i % ncols
+        if col == 0:
+            cols = parent.columns(ncols)
+        yield cols[col]
+        i += 1
+
+
 def get_params_constraints(estimator: BaseEstimator) -> dict[str, tuple[list, Any]]:
-    params = estimator.get_params()
+    # initiate if not
+    estimator = estimator if isinstance(estimator, BaseEstimator) else estimator()
+
+    params_defaults = estimator.get_params()
     constraints = estimator._parameter_constraints
+
+    norm_constraints = {}
+    ignored_constraints = {}
+    for k, clist in constraints.items():
+        norm_clist, ignored = normalize_constraints(clist)
+        norm_constraints[k] = norm_clist
+        ignored_constraints[k] = ignored
 
     # sigparams = inspect.signature(estimator.__init__).parameters
     # defaults = {k: sigparams[k].default for k in params}
@@ -54,177 +97,207 @@ def get_params_constraints(estimator: BaseEstimator) -> dict[str, tuple[list, An
     # params = func_sig.bind(**estimator_kwargs)
     # params.apply_defaults()
 
-    params = {k: (constraints.get(k), params[k]) for k in params}
-
-    return params
-
-
-class _NoVal(NoValue):
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-
-def get_widget_espec(constr, default):
-    # """
-    # A parameter is valid if it satisfies one of the constraints from the list.
-    #     Constraints can be:
-    #     - an Interval object, representing a continuous or discrete range of numbers
-    #     - the string "array-like"
-    #     - the string "sparse matrix"
-    #     - the string "random_state"
-    #     - callable
-    #     - None, meaning that None is a valid value for the parameter
-    #     - any type, meaning that any instance of this type is valid
-    #     - an Options object, representing a set of elements of a given type
-    #     - a StrOptions object, representing a set of strings
-    #     - the string "boolean"
-    #     - the string "verbose"
-    #     - the string "cv_object"
-    #     - a MissingValues object representing markers for missing values
-    #     - a HasMethods object, representing method(s) an object must have
-    #     - a Hidden object, representing a constraint not meant to be exposed to the user
-    # """
-    def _none_widget(**kwargs):
-        st.text_input(value=f"{str(default)}", **kwargs, disabled=True)
-        return
-
-    widget = _none_widget
-    widget_kwargs = dict()
-
-    if constr == "random_state":
-        constr = Interval(Integral, 0, right=None, closed="left")
-    # if isinstance(constr, Hidden):
-    #     constr = constr.constraint
-
-    if constr is None:
-        pass
-    elif isinstance(constr, Interval):
-        convert = int if constr.type is Integral else float
-        invalids = (None, float("-inf"), float("inf"))
-
-        min_value = None if constr.left in invalids else convert(constr.left)
-        max_value = None if constr.right in invalids else convert(constr.right)
-        value = _NoVal() if default in invalids else convert(default)
-
-        if value is not _NoVal():
-            if (min_value is not None and value < min_value) or (
-                max_value is not None and value > max_value
-            ):
-                value = _NoVal()
-
-        widget = st.number_input
-        widget_kwargs = dict(
-            min_value=min_value,
-            max_value=max_value,
-            value=value,
+    results = {
+        k: (
+            norm_constraints.get(k, list()),
+            params_defaults[k],
+            ignored_constraints.get(k),
         )
+        for k in params_defaults
+    }
 
-    elif isinstance(constr, Options):
-        options = list(constr.options)
-        widget = st.selectbox
-        widget_kwargs = dict(
-            options=options,
-            index=options.index(default) if default in options else 0,
-        )
+    return results
 
-    elif constr == "boolean":
-        widget = st.checkbox
-        widget_kwargs = dict(value=default, 
-                            #  label_visibility="visible",
-                             )
 
-    elif isinstance(constr, Number) or (
-        isinstance(constr, type) and issubclass(constr, Number)
-    ):
-        converter = int if constr is Integral else float
-        widget = st.number_input
-        widget_kwargs = dict(
-            value=converter(0 if default is None else default),
-        )
-
-    else:
-
-        def foo(**kwargs):
-            st.write(f"Not supported: {str(constr)}")
-            return default
-
-        widget = foo
-
+def input_selectbox(c, default, options=None, **kwargs):
+    if options is None:
+        options = list(c.options)
+    widget = st.selectbox
+    widget_kwargs = dict(
+        options=options,
+        index=options.index(default) if default in options else 0,
+    )
     return widget, widget_kwargs
 
 
-def callback_add_estimator():
-    params = state.params_values
-    estimator = state._estimator.__class__().set_params(**params)
+def input_multiselect(c, default, **kwargs):
+    pass
 
-    state.chosen_estimators[state.estimator_label] = dict(
-        estimator=estimator,
-        # params=params
+
+def input_number(c, default, **kwargs):
+    convert = int if c.type is Integral else float
+    invalids = (None, float("-inf"), float("inf"))
+
+    min_value = None if c.left in invalids else convert(c.left)
+    max_value = None if c.right in invalids else convert(c.right)
+    value = convert(0) if default in invalids else convert(default)
+
+    if (min_value is not None) and (value < min_value):
+        value = min_value
+
+    if (max_value is not None) and (value > max_value):
+        value = max_value
+
+    widget = st.number_input
+    widget_kwargs = dict(
+        min_value=min_value,
+        max_value=max_value,
+        value=value,
+        step=1e-1 if convert is float else 1,
+        format="%.6f" if convert is float else "%d",
+        # help=str(c),
+        # label="value",
+        # label_visibility="visible",
     )
-    st.toast("Added")
+    return widget, widget_kwargs
 
 
-def callback_update_use_default(default, key_usedefault, key_value):
-    value = state.get(key_value, default)
-    state[key_usedefault] = False#(value is default) or (value == default)
+def input_text(c, default, **kwargs):
+    widget = st.text_input
+    widget_kwargs = dict(value=default, help=str(c))
+    pass
 
 
-def create_params_widgets(estimator_name, params, select_params):
+def input_toogle(c, default, **kwargs):
+    widget = st.toggle
+    widget_kwargs = dict(
+        # options = [False, True],
+        value=default,
+        help=str(c),
+        label_visibility="visible",
+    )
+    return widget, widget_kwargs
+
+
+def isinstance_of(c, type):
+    return isinstance(c, pv._InstancesOf) and issubclass(c.type, type)
+
+
+def dipatch_contraint(c, default, **kwargs):
+    """Dispatch the constraint into the appropriate create widget function."""
+
+    if isinstance_of(c, (numbers.Integral, numbers.Real)) and not isinstance_of(
+        c, bool
+    ):
+        type = numbers.Integral if isinstance_of(c, numbers.Integral) else numbers.Real
+        c = pv.Interval(type, None, None, closed="neither")
+
+    if isinstance(c, pv._NoneConstraint):
+        return lambda **x: None, dict()
+    if isinstance(c, pv._Booleans) or isinstance_of(c, bool):
+        return input_toogle(c, default, **kwargs)
+    if isinstance(c, pv.Interval):
+        return input_number(c, default, **kwargs)
+    if isinstance(c, pv.Options):
+        return input_selectbox(c, default, **kwargs)
+    if isinstance_of(c, str):
+        return input_text(c, default, **kwargs)
+    if isinstance_of(c, dict):
+        widget = st.data_editor
+        widget_kwargs = dict(
+            drop_label=None,
+            data=dict() if default is None else default,
+            use_container_width=True,
+        )
+        return widget, widget_kwargs
+
+    st.write(f"Unsuported: `{str(c)}`")
+    return lambda **kwargs: default, dict()
+
+
+def normalize_constraints(constraints):
+    c_expandable = (
+        pv.MissingValues,
+        pv._RandomStates,
+        pv._CVObjects,
+        pv._VerboseHelper,
+    )
+
+    c_supported = (pv._Booleans, pv.Interval, pv.Options, pv._IterablesNotString)
+    c_types_supported = (str, bool, numbers.Integral, numbers.Real, dict)
+
+    constraints = [pv.make_constraint(c) for c in constraints]
+    constraints = [
+        c._constraints if isinstance(c, c_expandable) else [c] for c in constraints
+    ]
+    constraints = [c for l in constraints for c in l]
+
+    ignored = [
+        c
+        for c in constraints
+        if not (isinstance(c, c_supported) or isinstance_of(c, c_types_supported))
+    ]
+    constraints = [
+        c
+        for c in constraints
+        if (isinstance(c, c_supported) or isinstance_of(c, c_types_supported))
+    ]
+
+    return constraints, ignored
+
+
+def create_params_widgets(estimator_name, params):
     params_values = {}
 
-    containers = list(get_grid(len(select_params), 3))
-    for (name, (constraints, default)), container in zip(params.items(), containers):
-        if name not in select_params:
+    containers = grid(ncols=3)
+    for param in params.items():
+        p_name, (p_constraints, p_default, p_ignored_constraints) = param
+        key_usedefault = "_".join([estimator_name, p_name, "usedefault"])
+        key_value = "_".join([estimator_name, p_name, "value"])
+        key_constraint = " ".join([estimator_name, p_name, "constraint"])
+
+        if p_default == "deprecated":
+            st.write(f"`{p_name}` ignored: deprecated")
             continue
 
-        key_usedefault = "_".join([estimator_name, name, "usedefault"])
-        key_value = "_".join([estimator_name, name, "value"])
-        constraints = [c for c in constraints if c is not None]
+        if p_ignored_constraints:
+            st.write(
+                f"`{p_name}` ignored:",
+                ", ".join(
+                    [f"{x} (`{type(x).__name__}`)" for x in p_ignored_constraints]
+                ),
+            )
 
+        container = next(containers)
         with container:
-            with st.expander(f"**{name}**", expanded=True):
-                if len(constraints) == 1:
-                    constr = constraints[0]
+            with st.expander(f"**{p_name.replace('_', ' ').title()}**", expanded=True):
+                if len(p_constraints) == 0:
+                    c = pv._NoneConstraint
+                elif len(p_constraints) == 1:
+                    c = p_constraints[0]
                 else:
-                    index = constraints.index(default) if default in constraints else 0
-
-                    constraint_key = " ".join([estimator_name, name, "constraint"])
-                    constr = st.selectbox(
-                        label=constraint_key,
-                        options=list(constraints),
-                        index=index,
-                        key=constraint_key,
+                    c = st.selectbox(
+                        label=key_constraint,
+                        options=list(p_constraints),
+                        key=key_constraint,
                         label_visibility="hidden",
                     )
 
-                widget, widget_kwargs = get_widget_espec(constr=constr, default=default)
-                
+                widget, widget_kwargs = dipatch_contraint(c, p_default)
 
-                _kwargs = dict(
-                    label_visibility="hidden",
-                )
+                _kwargs = dict(label=str(p_name), label_visibility="hidden")
                 _kwargs.update(widget_kwargs)
+                if "drop_label" in widget_kwargs:
+                    del _kwargs["label"]
+                    del _kwargs["label_visibility"]
+                    del _kwargs["drop_label"]
 
                 val = widget(
-                    label=str(name),
-                    **_kwargs,
                     key=key_value,
                     on_change=callback_update_use_default,
-                    args=(default, key_usedefault, key_value),
+                    args=(p_default, key_usedefault, key_value),
+                    # so label_visibility  can be overwritted
+                    **_kwargs,
                 )
 
                 use_default = st.checkbox(
-                    f"Use default `{default}`",
+                    f"Use default `{p_default}`",
                     value=True,
                     key=key_usedefault,
-                    help=f"Ignore input value and use the default `{default}`"
+                    help=f"Ignore input value and use the default `{p_default}`",
                 )
 
-                params_values[name] = default if use_default else val
+                params_values[p_name] = p_default if use_default else val
 
     # overwrite defaults with user input
     defaults = {k: v[1] for k, v in params.items()}
@@ -233,61 +306,95 @@ def create_params_widgets(estimator_name, params, select_params):
     return params_values
 
 
-def show_params_inputs():
-    select_estimator = state.select_estimator
-    estimator = state._estimator
+def callback_add_estimator():
+    params = state.params_values
+    _estimator_name, _estimator_cls = state.select_estimator
 
-    params = get_params_constraints(estimator)
+    try:
+        estimator = _estimator_cls().set_params(**params)
+    except Exception as e:
+        st.write(params)
+        st.error(str(e))
+        estimator = _estimator_cls(**params)
+
+    state.chosen_estimators[state.estimator_label] = dict(
+        estimator=estimator,
+        _params=params,
+        _cls=_estimator_cls,
+    )
+    st.toast("Added")
+
+
+def callback_update_use_default(default, key_usedefault, key_value):
+    value = state.get(key_value, default)
+    state[key_usedefault] = False  # (value is default) or (value == default)
+
+
+def show_params_inputs():
+    _estimator_name, _estimator_cls = state.select_estimator
+
+    params = get_params_constraints(_estimator_cls)
 
     select_params = st.multiselect(
-        "Select parameters", options=list(params.keys()), default=list(params.keys()),
-        help="Select model parameters"
+        "Select parameters",
+        options=list(params.keys()),
+        default=list(params.keys()),
+        help="Select model parameters",
     )
 
-    params_values = create_params_widgets(
-        estimator_name=select_estimator,
-        params=params,
-        select_params=select_params,
+    state.params_values = create_params_widgets(
+        estimator_name=_estimator_name,
+        params={k: v for k, v in params.items() if k in select_params},
     )
-
-    state.params_values = params_values
 
 
 def show_add_model():
     st.subheader("Add model")
+
     cols = st.columns(2)
 
     with cols[0]:
+        type_filter = st.multiselect(
+            "Estimator type",
+            options={"classifier", "regressor", "cluster", "transformer"},
+            default="regressor",
+            format_func=str.title,
+        )
+        estimators = get_all_regressors_sklearn(type_filter)
+
         select_estimator = st.selectbox(
             "Select model class",
-            options=ESTIMATORS,
+            options=estimators,
+            format_func=lambda x: x[0],
             key="select_estimator",
         )
-    _estimator = ESTIMATORS[state.select_estimator]
-    _estimator = _estimator if isinstance(_estimator, BaseEstimator) else _estimator()
-    state._estimator = _estimator
+        if not select_estimator:
+            st.stop()
+        _estimator_name, _estimator_cls = select_estimator
 
     with cols[1]:
-        st.text_input("Label", select_estimator, key="estimator_label")
+        st.text_input("Label", _estimator_name, key="estimator_label")
 
-    cols = st.columns([1, 1, 1])
-    with cols[0]:
-        st.button("Add", use_container_width=True, on_click=callback_add_estimator)
+        cols = st.columns(2)
+        with cols[0]:
+            st.button(
+                "Overwrite"
+                if state.estimator_label in state.chosen_estimators
+                else "Add",
+                use_container_width=True,
+                on_click=callback_add_estimator,
+                disabled=not state.estimator_label.strip(),
+            )
 
-    with cols[1]:
-        st.button(
-            "Delete",
-            use_container_width=True,
-            disabled=state.estimator_label not in state.chosen_estimators,
-            on_click=lambda: state.chosen_estimators.pop(state.estimator_label, None),
-        )
-
-    with cols[2]:
-        st.button(
-            "Delete ALL models",
-            use_container_width=True,
-            on_click=lambda: state.chosen_estimators.clear(),
-        )
+        with cols[1]:
+            st.button(
+                "Delete",
+                use_container_width=True,
+                disabled=state.estimator_label not in state.chosen_estimators,
+                on_click=lambda: state.chosen_estimators.pop(
+                    state.estimator_label, None
+                ),
+            )
 
 
 def show_params_values():
@@ -295,9 +402,27 @@ def show_params_values():
 
 
 def show_estimators():
-    # st.subheader("Models")
+    cols = st.columns(4)
+    with cols[0]:
+        st.subheader("Models")
+
+    with cols[-1]:
+        st.button(
+            "Delete ALL models",
+            use_container_width=True,
+            on_click=lambda: state.chosen_estimators.clear(),
+        )
+
+    chosen_estimators = {
+        k: {kk: str(vv) for kk, vv in v.items()}
+        for k, v in state.chosen_estimators.items()
+    }
+
     st.dataframe(
-        pd.DataFrame(state.chosen_estimators, index=["estimator", "params"]).T,
+        pd.DataFrame(chosen_estimators).T.reset_index(names="name"),
+        hide_index=True,
+        column_order=["name", "estimator"],
+        # pd.DataFrame(chosen_estimators, index=[1,2]).T,#, index=["estimator", "params"]).T,
         use_container_width=True,
     )
 
@@ -307,9 +432,6 @@ if __name__ == "__main__":
     init("chosen_estimators", dict())
     init("params_values", dict())
     init("_estimator", None)
-
-    if "chosen_estimators" not in state:
-        state["chosen_estimators"] = dict()
 
     st.header("Models")
     show_estimators()
