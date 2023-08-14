@@ -8,13 +8,13 @@ import streamlit as st
 from sklearn.base import BaseEstimator
 from sklearn.utils import all_estimators
 from streamlit import session_state as state
-
+from sklearn.ensemble import RandomForestClassifier
 import helpers as h
 
 
 @st.cache_data
 def get_all_regressors_sklearn(type_filter=None):
-    return all_estimators(type_filter=type_filter)
+    return dict(all_estimators(type_filter=type_filter))
 
 
 def get_params_constraints(estimator: BaseEstimator) -> dict[str, tuple[list, Any]]:
@@ -98,7 +98,7 @@ def input_number(c, default, **kwargs):
 def input_text(c, default, **kwargs):
     widget = st.text_input
     widget_kwargs = dict(value=default, help=str(c))
-    pass
+    return widget, widget_kwargs
 
 
 def input_toogle(c, default, **kwargs):
@@ -125,7 +125,7 @@ def dipatch_contraint(c, default, **kwargs):
         type = numbers.Integral if isinstance_of(c, numbers.Integral) else numbers.Real
         c = pv.Interval(type, None, None, closed="neither")
 
-    if isinstance(c, pv._NoneConstraint):
+    if isinstance(c, pv._NoneConstraint) or c is pv._NoneConstraint:
         return lambda **x: None, dict()
     if isinstance(c, pv._Booleans) or isinstance_of(c, bool):
         return input_toogle(c, default, **kwargs)
@@ -134,7 +134,7 @@ def dipatch_contraint(c, default, **kwargs):
     if isinstance(c, pv.Options):
         return input_selectbox(c, default, **kwargs)
     if isinstance_of(c, str):
-        return input_text(c, default, **kwargs)
+        return input_text(c, "" if default is None else default, **kwargs)
     if isinstance_of(c, dict):
         widget = st.data_editor
         widget_kwargs = dict(
@@ -206,19 +206,30 @@ def create_params_widgets(estimator_name, params):
             with st.expander(f"**{p_name.replace('_', ' ').title()}**", expanded=True):
                 if len(p_constraints) == 0:
                     c = pv._NoneConstraint
-                elif len(p_constraints) == 1:
-                    c = p_constraints[0]
                 else:
+                    # first c defaults to c that initial value satyisfies
+                    idx = [c.is_satisfied_by(p_default) for c in p_constraints]
+                    idx = idx.index(True) if True in idx else 0
+                    # st.write(p_name, p_default, new_default, idx)
+
                     c_idx = st.selectbox(
                         label=key_constraint,
                         options=list(range(len(p_constraints))),
+                        index=idx,
                         key=key_constraint,
                         format_func=lambda i: str(p_constraints[i]),
                         label_visibility="hidden",
+                        disabled=len(p_constraints) == 1,
                     )
                     c = p_constraints[c_idx]
 
-                widget, widget_kwargs = dipatch_contraint(c, p_default)
+                try:
+                    res = dipatch_contraint(c, p_default)
+                    widget, widget_kwargs = res
+                except Exception as e:
+                    # st.write(res)
+                    # st.write(f"{p_name=}, {str(c)=}, {c=}, {p_default=}, {p_constraints=}")
+                    raise e
 
                 _kwargs = dict(label=str(p_name), label_visibility="hidden")
                 _kwargs.update(widget_kwargs)
@@ -252,14 +263,15 @@ def create_params_widgets(estimator_name, params):
 
 
 def callback_add_estimator():
+    _estimator_name = state._estimator_name
+    _estimator_cls = state._estimator_cls
     params = state.params_values
-    _estimator_name, _estimator_cls = state.select_estimator
 
     try:
         estimator = _estimator_cls().set_params(**params)
     except Exception as e:
-        st.write(params)
-        st.error(str(e))
+        # st.write(str(type(_estimator_cls)), params)
+        # st.error(str(e))
         estimator = _estimator_cls(**params)
 
     state.chosen_estimators[state.estimator_label] = dict(
@@ -271,12 +283,12 @@ def callback_add_estimator():
 
 
 def callback_update_use_default(default, key_usedefault, key_value):
-    value = state.get(key_value, default)
     state[key_usedefault] = False  # (value is default) or (value == default)
 
 
 def show_params_inputs():
-    _estimator_name, _estimator_cls = state.select_estimator
+    _estimator_name = state._estimator_name
+    _estimator_cls = state._estimator_cls
 
     params = get_params_constraints(_estimator_cls)
 
@@ -302,23 +314,25 @@ def show_add_model():
         type_filter = st.multiselect(
             "Estimator type",
             options={"classifier", "regressor", "cluster", "transformer"},
-            default="regressor",
+            key="select_type_filter",
             format_func=str.title,
         )
-        estimators = get_all_regressors_sklearn(type_filter)
+        estimators = get_all_regressors_sklearn(type_filter if type_filter else None)
 
-        select_estimator = st.selectbox(
+        def update_selected_estimator():
+            state._estimator_cls = estimators[state._estimator_name]
+
+        estimator_name = st.selectbox(
             "Select model class",
-            options=estimators,
-            format_func=lambda x: x[0],
-            key="select_estimator",
+            options=[None] + list(estimators),
+            key="_estimator_name",
+            on_change=update_selected_estimator,
         )
-        if not select_estimator:
+        if not estimator_name:
             st.stop()
-        _estimator_name, _estimator_cls = select_estimator
 
     with cols[1]:
-        st.text_input("Label", _estimator_name, key="estimator_label")
+        st.text_input("Label", estimator_name, key="estimator_label")
 
         cols = st.columns(2)
         with cols[0]:
@@ -340,10 +354,6 @@ def show_add_model():
                     state.estimator_label, None
                 ),
             )
-
-
-def show_params_values():
-    st.write(state.params_values)
 
 
 def show_estimators():
@@ -376,7 +386,9 @@ if __name__ == "__main__":
     st.set_page_config(layout="wide")
     h.init("chosen_estimators", dict())
     h.init("params_values", dict())
-    h.init("_estimator", None)
+    h.init("select_type_filter", [])
+    h.init("_estimator_cls", None)
+    h.init("_estimator_name", None)
 
     st.header("Models")
     show_estimators()
