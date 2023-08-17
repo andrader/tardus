@@ -35,35 +35,20 @@ def assert_init(k):
 assert_init("datasets")
 assert_init("chosen_estimators")
 
-st.selectbox("Dataset", [None] + list(state.datasets), key="fit_ds_name")
 
-if state.fit_ds_name is not None:
-    dataset: pd.DataFrame = state.datasets[state.fit_ds_name]
-
-    cols = list(dataset.columns)
-    target_idx = [i for i, c in enumerate(dataset.columns) if c.lower() == "target"]
-    target_idx = target_idx[0] if target_idx else 0
-
-    target = st.selectbox("Target", cols, target_idx, key="fit_target")
-
-    available_features = [c for c in cols if c != target]
-    features = st.multiselect(
-        "Features", available_features, available_features, key="fit_features"
-    )
-
+def show_cross_validation(X, y):
     estimator_name = st.selectbox(
         "Estimators", state.chosen_estimators, key="fit_estimator"
     )
-    estimator: BaseEstimator = state.chosen_estimators[estimator_name]["estimator"]
+    estimator = state.chosen_estimators[estimator_name]["estimator"]
 
-    cv_strategies = [None, KFold, StratifiedKFold, LeaveOneOut, TimeSeriesSplit]
+    cv_strategies = [KFold, StratifiedKFold, LeaveOneOut, TimeSeriesSplit]
     cv_strategy = st.selectbox(
         "Cross validation",
         cv_strategies,
         format_func=lambda x: getattr(x, "__name__", str(x)),
     )
 
-    # cv params inputs (exhaustive, all possible inputs) depending on strategy
     cv_params = {}
     if cv_strategy is not None:
         if cv_strategy == KFold:
@@ -81,24 +66,12 @@ if state.fit_ds_name is not None:
     # select metric/score (exhaustive list)
     metrics = get_scorer_names()
     metric = st.selectbox("Metric", metrics)
-    scorer = get_scorer(metric)
-
-    # st.write(str(type(estimator)))
-    with st.expander("Data", expanded=False):
-        st.dataframe(dataset[[target] + features], use_container_width=True, height=300)
 
     if st.button("Run cross validation", use_container_width=True):
-        # get_data from dataset, features, target
-        X = dataset[features]
-        y = dataset[target]
-
         # split train and test data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42
         )
-
-        # create a scorer based on the selected metric
-        scoring = make_scorer(scorer)
 
         # cv on train data
         cv_results = cross_validate(
@@ -117,11 +90,27 @@ if state.fit_ds_name is not None:
     st.write("Results")
     if "cv_results" in state:
         # show cv results as dataframe.
-
         st.dataframe(
             pd.DataFrame(state.cv_results).sort_values("test_score"),
             use_container_width=True,
         )
 
 
-## TODO: Grid Search
+def show_grid_search():
+    st.subheader("Grid-search")
+
+
+if "data" in state and state.data:
+    data = state.data
+    dataset_name = data["dataset_name"]
+    target_name = data["target_name"]
+    feature_names = data["feature_names"]
+    dataset = data["dataset"]
+    features = data["features"]
+    target = data["target"]
+
+    with st.expander("Data", expanded=False):
+        st.dataframe(dataset, use_container_width=True, height=300)
+
+    # show_cross_validation(features, target)
+    show_grid_search()
