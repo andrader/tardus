@@ -1,5 +1,4 @@
-from sklearn.base import BaseEstimator
-from sklearn.metrics import make_scorer, get_scorer_names, get_scorer
+from sklearn.metrics import get_scorer_names
 from sklearn.model_selection import (
     KFold,
     StratifiedKFold,
@@ -12,11 +11,10 @@ import streamlit as st
 from sklearn.model_selection import cross_validate
 
 state = st.session_state
-import helpers as h
 
 
 def assert_init(k):
-    if not k in state:
+    if k not in state:
         st.error(f"'{k}' not initialized")
         st.stop()
 
@@ -96,10 +94,6 @@ def show_cross_validation(X, y):
         )
 
 
-def show_grid_search():
-    st.subheader("Grid-search")
-
-
 if "data" in state and state.data:
     data = state.data
     dataset_name = data["dataset_name"]
@@ -113,4 +107,3 @@ if "data" in state and state.data:
         st.dataframe(dataset, use_container_width=True, height=300)
 
     # show_cross_validation(features, target)
-    show_grid_search()

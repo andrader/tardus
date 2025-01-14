@@ -1,55 +1,19 @@
 import numbers
 from numbers import Integral
-from typing import Any
 
 import pandas as pd
 import sklearn.utils._param_validation as pv
 import streamlit as st
-from sklearn.base import BaseEstimator
 from sklearn.utils import all_estimators
 from streamlit import session_state as state
-from sklearn.ensemble import RandomForestClassifier
 import helpers as h
+from tardus.parameters import _isinstance_of
+from tardus.parameters import get_params_constraints
 
 
 @st.cache_data
 def get_all_regressors_sklearn(type_filter=None):
     return dict(all_estimators(type_filter=type_filter))
-
-
-def get_params_constraints(estimator: BaseEstimator) -> dict[str, tuple[list, Any]]:
-    # initiate if not
-    estimator = estimator if isinstance(estimator, BaseEstimator) else estimator()
-
-    params_defaults = estimator.get_params()
-    constraints = estimator._parameter_constraints
-
-    norm_constraints = {}
-    ignored_constraints = {}
-    for k, clist in constraints.items():
-        norm_clist, ignored = normalize_constraints(clist)
-        norm_constraints[k] = norm_clist
-        ignored_constraints[k] = ignored
-
-    # sigparams = inspect.signature(estimator.__init__).parameters
-    # defaults = {k: sigparams[k].default for k in params}
-    # # overwrite signature defaults with instance params
-    # params = dict(defaults, **params)
-
-    # estimator_kwargs = estimator.get_params()
-    # params = func_sig.bind(**estimator_kwargs)
-    # params.apply_defaults()
-
-    results = {
-        k: (
-            norm_constraints.get(k, list()),
-            params_defaults[k],
-            ignored_constraints.get(k),
-        )
-        for k in params_defaults
-    }
-
-    return results
 
 
 def input_selectbox(c, default, options=None, **kwargs):
@@ -112,30 +76,26 @@ def input_toogle(c, default, **kwargs):
     return widget, widget_kwargs
 
 
-def isinstance_of(c, type):
-    return isinstance(c, pv._InstancesOf) and issubclass(c.type, type)
-
-
 def dipatch_contraint(c, default, **kwargs):
     """Dispatch the constraint into the appropriate create widget function."""
 
-    if isinstance_of(c, (numbers.Integral, numbers.Real)) and not isinstance_of(
+    if _isinstance_of(c, (numbers.Integral, numbers.Real)) and not _isinstance_of(
         c, bool
     ):
-        type = numbers.Integral if isinstance_of(c, numbers.Integral) else numbers.Real
+        type = numbers.Integral if _isinstance_of(c, numbers.Integral) else numbers.Real
         c = pv.Interval(type, None, None, closed="neither")
 
     if isinstance(c, pv._NoneConstraint) or c is pv._NoneConstraint:
         return lambda **x: None, dict()
-    if isinstance(c, pv._Booleans) or isinstance_of(c, bool):
+    if isinstance(c, pv._Booleans) or _isinstance_of(c, bool):
         return input_toogle(c, default, **kwargs)
     if isinstance(c, pv.Interval):
         return input_number(c, default, **kwargs)
     if isinstance(c, pv.Options):
         return input_selectbox(c, default, **kwargs)
-    if isinstance_of(c, str):
+    if _isinstance_of(c, str):
         return input_text(c, "" if default is None else default, **kwargs)
-    if isinstance_of(c, dict):
+    if _isinstance_of(c, dict):
         widget = st.data_editor
         widget_kwargs = dict(
             drop_label=None,
@@ -146,37 +106,6 @@ def dipatch_contraint(c, default, **kwargs):
 
     st.write(f"Unsuported: `{str(c)}`")
     return lambda **kwargs: default, dict()
-
-
-def normalize_constraints(constraints):
-    c_expandable = (
-        pv.MissingValues,
-        pv._RandomStates,
-        pv._CVObjects,
-        pv._VerboseHelper,
-    )
-
-    c_supported = (pv._Booleans, pv.Interval, pv.Options, pv._IterablesNotString)
-    c_types_supported = (str, bool, numbers.Integral, numbers.Real, dict)
-
-    constraints = [pv.make_constraint(c) for c in constraints]
-    constraints = [
-        c._constraints if isinstance(c, c_expandable) else [c] for c in constraints
-    ]
-    constraints = [c for l in constraints for c in l]
-
-    ignored = [
-        c
-        for c in constraints
-        if not (isinstance(c, c_supported) or isinstance_of(c, c_types_supported))
-    ]
-    constraints = [
-        c
-        for c in constraints
-        if (isinstance(c, c_supported) or isinstance_of(c, c_types_supported))
-    ]
-
-    return constraints, ignored
 
 
 def create_params_widgets(estimator_name, params):
@@ -269,7 +198,7 @@ def callback_add_estimator():
 
     try:
         estimator = _estimator_cls().set_params(**params)
-    except Exception as e:
+    except Exception:
         # st.write(str(type(_estimator_cls)), params)
         # st.error(str(e))
         estimator = _estimator_cls(**params)
@@ -394,3 +323,5 @@ if __name__ == "__main__":
     show_estimators()
     show_add_model()
     show_params_inputs()
+
+    # Create pipeline
