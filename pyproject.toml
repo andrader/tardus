@@ -1,0 +1,11 @@
+[project]
+name = "project-name"
+version = "0.1.0"
+requires-python = "==3.11.4"
+dependencies = [ "pandas", "plotly", "scikit-learn", "streamlit-nightly", "pre-commit", "datasets", "openpyxl",]
+
+
+[tool.uv]
+dev-dependencies = [
+    "pre-commit>=4.0.1",
+]
